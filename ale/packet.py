@@ -15,21 +15,49 @@ class Packet:
         self.confidence = None
         self.channel = None
 
+    def __repr__(self):
+        try:
+            return 'ale.Packet[' + self.command.decode('utf-8') + ' : ' + self.origin.decode('utf-8') + ' : ' + self.destination.decode('utf-8') + ']'
+        except:
+            return 'ale.Packet[ : : ]'
+
+    def pack(self):
+        packet = Packet.PREAMBLE + self.command + self.origin + Packet.SEPARATOR + self.destination + Packet.SEPARATOR + self.data
+        return packet
+
     def unpack(self, raw):
+        # remove preamble
         len_preamble = len(Packet.PREAMBLE)
+        raw = raw[len_preamble:]
+
         len_command = 2
         len_separator = len(Packet.SEPARATOR)
         address_separator = raw.find(Packet.SEPARATOR)
         data_separator = raw.find(Packet.SEPARATOR, address_separator + len_separator)
 
-        # remove preamble
-        raw = raw[len_preamble:]
         self.command = raw[:len_command]
         self.origin = raw[len_command:address_separator]
-        self.destination = raw[address_separator + len_sepatator:data_separator]
+        self.destination = raw[address_separator + len_separator:data_separator]
         self.data = raw[data_separator + len_separator:]
 
-    def pack(self):
-        packet = Packet.PREAMBLE + self.command + self.origin + Packet.SEPARATOR + self.destination + Packet.SEPARATOR + data
+    def to_dict(self):
+        packet = {}
+        packet['origin'] = self.origin.decode('utf-8')
+        packet['destination'] = self.destination.decode('utf-8')
+        packet['command'] = self.command.decode('utf-8')
+        packet['data'] = self.data.decode('utf-8')
+        packet['timestamp'] = self.timestamp
+        packet['confidence'] = self.confidence
+        packet['channel'] = self.channel
+
         return packet
+
+    def from_dict(self, packet):
+        self.origin = packet['origin'].encode('utf-8')
+        self.destination = packet['destination'].encode('utf-8')
+        self.command = packet['command'].encode('utf-8')
+        self.data = packet['data'].encode('utf-8')
+        self.timestamp = packet['timestamp']
+        self.confidence = packet['confidence']
+        self.channel = packet['channel']
 
