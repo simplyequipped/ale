@@ -14,10 +14,9 @@ import ale
 # - recognize activity on channel (lqa?), look for next best channel to place call
 # - add fskmodem.receiving(), return bool (based on carrier sense)
 # - add fskmodem.transmitting(), return bool
-# - Reticulum ALE interface
-# - selective calling via Reticulum destination
+# - Reticulum ALE interface using Reticulum destinations as addresses
 # - transmit timing may not be accurate due to fskmodem carrier sense
-# - support other tranceivers via hamlib or flrig?
+# - support other tranceivers via hamlib/flrig?
 # - support other modems via fldigi?
 
 
@@ -82,7 +81,7 @@ class ALE:
         self.log_queue = []
         self.last_log_timestamp = 0
 
-        #TODO cull log instead?
+        #TODO cull log instead
         # clear log when starting
         if os.path.exists(self.log_path):
             os.remove(self.log_path)
@@ -243,6 +242,7 @@ class ALE:
         self.channels = self.loaded_scanlists[self.scanlist]
         self.call_timeout = ALE.SCAN_WINDOW * len(self.channels.keys()) * 2 # seconds
         self.sound_timeout = ALE.SCAN_WINDOW * len(self.channels.keys()) # seconds
+        #TODO call on every channel? that may take a while and seems unnecessary
         self.max_call_channel_attempts = min(3, len(self.channels.keys()))
         num_channels = len(self.channels.keys())
 
@@ -320,7 +320,7 @@ class ALE:
                 if self.channels[self.channel]['mode'] == 'LSB':
                     self.radio.set_sideband(1)
             except:
-                #TODO handle intelligently
+                #TODO handle
                 # if error communicating with radio, go offline
                 self.online == False
                 self.log('Going offline, failed to communicate with radio')
@@ -329,6 +329,7 @@ class ALE:
             self.channel = channel
             self.last_channel_change_timestamp = time.time()
             self.last_carrier_sense_timestamp = 0
+            #TODO remove, or add logging levels?
             #self.log('Channel set to ' + channel) 
 
     def next_channel(self):
@@ -342,7 +343,6 @@ class ALE:
 
         self.set_channel(next_channel)
 
-    #TODO if call fails try calling on other channels
     def call(self, address, next_channel=False):
         if not isinstance(address, bytes):
             address = address.encode('utf-8')
@@ -387,6 +387,7 @@ class ALE:
             # (baudrate (bps) / 8 bits per character) * (scan window / 3)
             len_min_tx = int( (self.baudrate / 8) * (ALE.SCAN_WINDOW / 3) )
             if len_packet < len_min_tx:
+                #TODO pad with a different character since b'#' is the default fskmodem sync byte?
                 # pad packet data to equal minimum transmit time
                 packet.data = b'#' * (len_min_tx - len_packet)
 
@@ -492,6 +493,7 @@ class ALE:
                     self.call_address = None
                     self.call_started_timestamp = 0
                     self.call_timeout_timestamp = 0
+                    self.call_channel_attempts.clear()
                     self.state = ALE.STATE_SCANNING
 
             # only the called station can be in a connecting state, since the calling station goes from
@@ -534,6 +536,7 @@ class ALE:
                     self.call_address = None
                     self.call_started_timestamp = 0
                     self.call_timeout_timestamp = 0
+                    self.call_channel_attempts.clear()
                     self.state = ALE.STATE_SCANNING
 
 
@@ -554,6 +557,7 @@ class ALE:
                     self.call_address = None
                     self.call_started_timestamp = 0
                     self.call_timeout_timestamp = 0
+                    self.call_channel_attempts.clear()
                     self.state = ALE.STATE_SCANNING
 
             elif self.state == ALE.STATE_SOUNDING:
@@ -619,12 +623,8 @@ class ALE:
                     self.sound_packet = None
                         
                 # go to the next channel
-                if (
-                    # time to change channel
-                    current_time > (self.last_channel_change_timestamp + ALE.SCAN_WINDOW) and
-                    # no recent activity on the channel
-                    current_time > (self.last_activity_timestamp + ALE.SCAN_WINDOW)
-                ):
+                # if time to change channel and no recent activity on channel
+                if (current_time > (self.last_channel_change_timestamp + ALE.SCAN_WINDOW) and current_time > (self.last_activity_timestamp + ALE.SCAN_WINDOW):
                     # perform a sounding first if the channel quality data is stale
                     if self.lqa.channel_stale(self.channel):
                         self.sound_timeout_timestamp = current_time + self.sound_timeout
@@ -645,35 +645,44 @@ class ALE:
                         self.last_channel_change_timestamp = current_time
                         
 
-            # handle timeout in call states
-            if (
-                # in any call state
-                (self.state == ALE.STATE_CALLING or
-                self.state == ALE.STATE_CONNECTING or
-                self.state == ALE.STATE_CONNECTED) and
-                # and the call times out
-                current_time > self.call_timeout_timestamp
-            ):
-                # if calling, try the next best channel
-                if self.state == ALE.STATE_CALLING:
+            # handle timeout in connecting our connected states
+            if (self.state == ALE.STATE_CONNECTING or self.state == ALE.STATE_CONNECTED) and current_time > self.call_timeout_timestamp:
+                # end the call
+                call_duration = current_time - self.call_started_timestamp
+                self.log('Call timed out, disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
+        
+                if self.callback['disconnected'] != None:
+                    self.callback['disconnected'](self.call_address, call_duration)
+    
+                self.call_address = None
+                self.call_started_timestamp = 0
+                self.call_timeout_timestamp = 0
+                self.call_channel_attempts.clear()
+                self.state = ALE.STATE_SCANNING
+
+            # handle calling state
+            if self.state == ALE.STATE_CALLING:
+                # if call timed out
+                if current_time > self.call_timeout_timestamp:
+                    # try the next best channel
                     if len(self.call_channel_attempts) < self.max_call_channel_attempts:
                         self.call(self.call_address, next_channel = True)
-                # otherwise, end the call
-                else:
-                    call_duration = current_time - self.call_started_timestamp
-                    self.log('Call timed out, disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-        
-                    if self.callback['disconnected'] != None:
-                        self.callback['disconnected'](self.call_address, call_duration)
-    
-                    self.call_address = None
-                    self.call_started_timestamp = 0
-                    self.call_timeout_timestamp = 0
-                    self.state = ALE.STATE_SCANNING
+                    else:
+                        # end the call
+                        call_duration = current_time - self.call_started_timestamp
+                        self.log('Call timed out, disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
+                
+                        if self.callback['disconnected'] != None:
+                            self.callback['disconnected'](self.call_address, call_duration)
+            
+                        self.call_address = None
+                        self.call_started_timestamp = 0
+                        self.call_timeout_timestamp = 0
+                        self.call_channel_attempts.clear()
+                        self.state = ALE.STATE_SCANNING
 
-            # send call packets once per scan window
-            if self.state == ALE.STATE_CALLING:
-                if current_time > (self.last_call_packet_timestamp + ALE.SCAN_WINDOW):
+                # while calling send call packets once per scan window
+                elif current_time > (self.last_call_packet_timestamp + ALE.SCAN_WINDOW):
                     self.last_call_packet_timestamp = current_time
                     self._send_ale(ALE.CMD_CALL, self.call_address)
 
@@ -689,7 +698,7 @@ class ALE:
                     self.log('End sounding on channel ' +  self.channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
                     self.sound_rx_ack_count = 0
                     self.state = ALE.STATE_SCANNING
-                # send sounding packets once per scan window
+                # while sounding send sound packets once per scan window
                 elif current_time > (self.last_sound_packet_timestamp + ALE.SCAN_WINDOW):
                     self.last_sound_packet_timestamp = current_time
                     self._send_ale(ALE.CMD_SOUND, ALE.ADDRESS_ALL)

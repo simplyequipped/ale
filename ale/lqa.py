@@ -7,7 +7,6 @@ import pickle
 import ale
 
 #TODO
-# - store history on shutdown, load at start, cull when loaded
 # - test LQA time settings
 
 class LQA:
@@ -165,10 +164,4 @@ class LQA:
                 self._cull_history()
 
             time.sleep(1)
-
-        
-
-
-
-
 

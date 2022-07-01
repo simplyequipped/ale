@@ -1,5 +1,7 @@
 # 7-bit packet overhead (not including addresses or data)
-# tx time using 20-bit RNS addresses (no data, 47 characters): 1.25 seconds
+#
+# ALE packet transmit time using 20-bit RNS addresses (no data, 47 characters, 300 baud): 1.25 seconds
+# Note: RNS github discussion #72 proposing move to 128-bit address space (263 characters: 7 second transmit time)
 
 class Packet:
 
