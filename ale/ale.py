@@ -706,19 +706,3 @@ class ALE:
             # simmer down
             time.sleep(0.1)
 
-            
-
-
-
-            
-    
-
-
-
-
-
-
-
-
-
-
