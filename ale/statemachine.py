@@ -5,6 +5,7 @@ import random
 import ale
 
 
+
 class StateScanning:
     def __init__(self):
         self.name = 'scanning'
