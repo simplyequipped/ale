@@ -18,33 +18,13 @@ import ale
 # - transmit timing may not be accurate due to fskmodem carrier sense
 # - support other tranceivers via hamlib/flrig?
 # - support other modems via fldigi?
+# - channel data could include more extensive modem and radio config
+
+#TODO in jobs loop, monitor modem tx buffer for packets with channels other than the current channel
+#TODO save and load config data: address, whitelist, blacklist
 
 
 class ALE:
-
-    # default scanlists and channels
-    #TODO channel data could include more extensive modem and radio config
-    DEFAULT_SCANLIST = {
-        'General' : {
-            '40A'   : {'freq': 7057000, 'mode': 'USB'},
-            '40B'   : {'freq': 7157000, 'mode': 'USB'},
-            '20A'   : {'freq': 14057000, 'mode': 'USB'},
-            '20B'   : {'freq': 14157000, 'mode': 'USB'},
-            '10A'   : {'freq': 28557000, 'mode': 'USB'},
-            '10B'   : {'freq': 29257000, 'mode': 'USB'}
-        },
-        'NVIS' : {
-            '80A'   : {'freq': 3557000, 'mode': 'USB'},
-            '80B'   : {'freq': 3657000, 'mode': 'USB'},
-            '40A'   : {'freq': 7057000, 'mode': 'USB'},
-            '40B'   : {'freq': 7157000, 'mode': 'USB'}
-        },
-        'HF Packet' : {
-            '80PKT'   : {'freq': 3598000, 'mode': 'LSB'},
-            '40PKT'   : {'freq': 7086500, 'mode': 'USB'},
-            '20PKT'   : {'freq': 14105000, 'mode': 'LSB'}
-        }
-    }
 
     # operating states
     STATE_SCANNING      = 0xA # scanning channels
@@ -66,55 +46,24 @@ class ALE:
     CMD_END     = b'CE'
     COMMANDS = [CMD_SOUND, CMD_ACK, CMD_CALL, CMD_END]
 
-    SCAN_WINDOW     = 3 # seconds
+    SCAN_WINDOW = 3 # seconds
 
     def __init__(self, address, radio_serial_port=None, alsa_device_string='QDX', baudrate=300, sync_byte='0x23', confidence=1.5, text_mode=False):
         self._text_mode = text_mode
         self.baudrate = baudrate
+        self.scanlists = ale.default_scanlists
 
-        self.loaded_scanlists = ALE.DEFAULT_SCANLIST
+        self.enable_whitelist = False
+        self.whitelist_addresses = []
+        self.enable_blacklist = False
+        self.blacklist_addresses = []
 
-        self.config_dir = os.path.expanduser('~/.ale')
-        self.scanlist_path = os.path.join(self.config_dir, 'scanlists')
-        self.log_path = os.path.join(self.config_dir, 'log.txt')
-
-        self.log_queue = []
-        self.last_log_timestamp = 0
-
-        #TODO cull log instead
-        # clear log when starting
-        if os.path.exists(self.log_path):
-            os.remove(self.log_path)
-
-        # if scanlist file doesn't exist, create it using the default scanlist
-        # if the scanlist file exists, load it
-        if not os.path.exists(self.scanlist_path):
-            if not os.path.exists(self.config_dir):
-                os.mkdir(self.config_dir)
-
-            try:
-                with open(self.scanlist_path, 'w') as fd:
-                    json.dump(self.loaded_scanlists, fd, indent='\t')
-                self.log('Saved scanlists to ' + self.scanlist_path)
-            except:
-                #TODO handle
-                pass
-
-        else:
-            try:
-                with open(self.scanlist_path, 'r') as fd:
-                    self.loaded_scanlists = json.load(fd)
-                self.log('Loaded scanlists from ' + self.scanlist_path)
-            except:
-                #TODO handle
-                pass
-        
         if not isinstance(address, bytes):
             address = address.encode('utf-8')
 
         self.address = address
         self.addresses = [self.address]
-        self.call_address = b''
+        self.group_addresses = []
 
         self.callback = {
             'rx' : None,
@@ -123,33 +72,43 @@ class ALE:
             'disconnected' : None
         }
 
-        self.enable_whitelist = False
-        self.whitelist_addresses = []
-        self.enable_blacklist = False
-        self.blacklist_addresses = []
+        self.log_queue = []
+        self.last_log_timestamp = 0
 
-        self.last_channel_change_timestamp = 0
-        self.last_carrier_sense_timestamp = 0 # any activity
-        self.last_activity_timestamp = 0 # activity addressed to us
+        self.config_dir = os.path.expanduser('~/.ale')
+        self.scanlist_path = os.path.join(self.config_dir, 'scanlists')
+        self.log_path = os.path.join(self.config_dir, 'log')
 
-        self.call_started_timestamp = 0
-        self.call_timeout_timestamp = 0
-        self.last_call_packet_timestamp = 0
-        # only used for call ack packets, not all ack packets
-        self.last_ack_packet_timestamp = 0
-        self.call_channel_attempts = []
+        #TODO cull log instead
+        # clear log when starting
+        if os.path.exists(self.log_path):
+            os.remove(self.log_path)
 
-        self.sound_started_timestamp = 0
-        self.sound_timeout_timestamp = 0
-        self.last_sound_packet_timestamp = 0
-        self.sound_rx_ack_count = 0
-        self.sound_packet = None
-        self.sound_ack_delay = 0
+        # if scanlist file doesn't exist, create it using the default scanlist
+        if not os.path.exists(self.scanlist_path):
+            if not os.path.exists(self.config_dir):
+                os.mkdir(self.config_dir)
 
-        self.call_timeout = 0
-        self.sound_timeout = 0
-        self.connected_timeout = 5 * 60 # seconds
+            try:
+                with open(self.scanlist_path, 'w') as fd:
+                    json.dump(self.scanlists, fd, indent='\t')
+                self.log('Saved scanlists to ' + self.scanlist_path)
+            except:
+                #TODO handle
+                pass
 
+        # if the scanlist file exists, load it
+        else:
+            try:
+                with open(self.scanlist_path, 'r') as fd:
+                    self.scanlists = json.load(fd)
+                self.log('Loaded scanlists from ' + self.scanlist_path)
+            except:
+                #TODO handle
+                pass
+        
+        # configure radio and modem
+        #TODO
         if not self._text_mode:
             self.radio = qdx.QDX(port=radio_serial_port)
 
@@ -170,12 +129,12 @@ class ALE:
         # configure exit handler
         atexit.register(self.stop)
 
-        self.online = True
-        self.state = ALE.STATE_SCANNING
-        self.log(str(self) + ' online')
         self.set_scanlist(self.get_scanlists()[0])
         self.set_channel(list(self.channels.keys())[0])
         self.lqa = ale.LQA(self)
+        self.state_machine = ale.ALEStateMachine(self)
+        self.online = True
+        self.log(str(self) + ' online')
 
         thread = threading.Thread(target=self._jobs)
         thread.setDaemon(True)
@@ -196,35 +155,6 @@ class ALE:
         self.lqa.save_history()
         self._manage_log()
 
-    def log(self, message):
-        log_message = time.strftime('%x %X') + '  ' + message + '\n'
-        self.log_queue.append(log_message)
-
-    def _manage_log(self):
-        if len(self.log_queue) == 0:
-            return None
-
-        log_messages = ''
-
-        with open(self.log_path, 'a') as fd:
-            for message in self.log_queue:
-                fd.write(message)
-
-        self.log_queue.clear()
-        self.last_log_timestamp = time.time()
-
-    def get_state(self):
-        if self.state == ALE.STATE_SCANNING:
-            return 'scanning'
-        elif self.state == ALE.STATE_CALLING:
-            return 'calling'
-        elif self.state == ALE.STATE_CONNECTING:
-            return 'connecting'
-        elif self.state == ALE.STATE_CONNECTED:
-            return 'connected'
-        elif self.state == ALE.STATE_SOUNDING:
-            return 'sounding'
-
     # useful for displaying antenna requirements
     def get_channel_freq_list(self):
         freqs = []
@@ -235,21 +165,17 @@ class ALE:
         return freqs.sort()
 
     def set_scanlist(self, scanlist):
-        if scanlist not in self.loaded_scanlists.keys():
+        if scanlist not in self.scanlists.keys():
             return None
 
         self.scanlist = scanlist
-        self.channels = self.loaded_scanlists[self.scanlist]
-        self.call_timeout = ALE.SCAN_WINDOW * len(self.channels.keys()) * 2 # seconds
-        self.sound_timeout = ALE.SCAN_WINDOW * len(self.channels.keys()) # seconds
-        #TODO call on every channel? that may take a while and seems unnecessary
-        self.max_call_channel_attempts = min(3, len(self.channels.keys()))
+        self.channels = self.scanlists[self.scanlist]
         num_channels = len(self.channels.keys())
 
         self.log('Scanlist set to ' + self.scanlist + ' (' + str(num_channels) + ' channels, ' + str(num_channels * ALE.SCAN_WINDOW) + ' seconds total scan time)')
 
     def get_scanlists(self):
-        return list(self.loaded_scanlists.keys())
+        return list(self.scanlists.keys())
 
     def add_address(self, address):
         if address not in self.addresses:
@@ -306,6 +232,18 @@ class ALE:
     def set_connected_callback(self, func):
         self.callback['connected'] = func
 
+    def log(self, message):
+        log_message = time.strftime('%x %X') + '  ' + message + '\n'
+        self.log_queue.append(log_message)
+
+    def _process_log_queue(self):
+        with open(self.log_path, 'a') as fd:
+            for message in self.log_queue:
+                fd.write(message)
+
+        self.log_queue.clear()
+        self.last_log_timestamp = time.time()
+
     def set_channel(self, channel):
         if channel not in self.channels.keys():
             return None
@@ -327,45 +265,14 @@ class ALE:
 
         if self.online:
             self.channel = channel
-            self.last_channel_change_timestamp = time.time()
-            self.last_carrier_sense_timestamp = 0
             #TODO remove, or add logging levels?
             #self.log('Channel set to ' + channel) 
 
-    def next_channel(self):
-        channels = list(self.channels.keys())
-        channel_index = channels.index(self.channel)
-
-        if channel_index < (len(channels) - 1):
-            next_channel = channels[channel_index + 1]
-        else:
-            next_channel = channels[0]
-
-        self.set_channel(next_channel)
-
-    def call(self, address, next_channel=False):
-        if not isinstance(address, bytes):
-            address = address.encode('utf-8')
-
-        if self.state != ALE.STATE_CALLING or next_channel:
-            self.state = ALE.STATE_CALLING
-            self.call_address = address
-
-            if next_channel:
-                best_channel = self.lqa.best_channel(address, exclude = self.call_channel_attempts)
-            else:
-                best_channel = self.lqa.best_channel(address)
-                self.call_started_timestamp = time.time()
-                
-            self.call_channel_attempts.append(best_channel)
-            self.set_channel(best_channel)
-            self.call_timeout_timestamp = time.time() + self.call_timeout
-
-        self.log('Calling ' + self.call_address.decode('utf-8') + ' on channel ' + best_channel)
-        self.last_call_packet_timestamp = time.time()
-        self._send_ale(ALE.CMD_CALL, address)
+    def call(self, address):
+        self.state_machine.call(address)
 
     def send(self, data):
+        #TODO
         if self._text_mode:
             print(data)
         else:
@@ -399,15 +306,17 @@ class ALE:
         preamble = raw[:len(ale.Packet.PREAMBLE)]
         # handle non-ale packets
         if preamble != ale.Packet.PREAMBLE:
-            if self.state == ALE.CONNECTED:
-                self.call_timeout_timestamp = current_time + self.connected_timeout
+            if self.state_machine.state == ale.ALE.CONNECTED:
+                self.state.keep_alive()
                 
                 # pass packets to data handling application when connected
                 if self.callback['receive'] != None:
                     self.callback['receive'](raw)
 
+            # drop the packet, no further processing
             return None
 
+        # load received date into packet
         packet = ale.Packet()
         # discard packet if it fails to unpack, which likely means it is corrupted
         try:
@@ -426,164 +335,7 @@ class ALE:
         if self.enable_blacklist and packet.origin in self.blacklist_addresses:
             return None
 
-        if packet.command in ALE.COMMANDS:
-            if packet.destination in self.addresses:
-                self.last_activity_timestamp = current_time
-
-            if self.state == ALE.STATE_SCANNING:
-                if packet.command == ALE.CMD_SOUND:
-                    self.sound_packet = packet
-                    # random delay to avoid multiple stations ack-ing a sounding at the same time
-                    self.sound_ack_delay = random.uniform(0.25, 1)
-
-                # if command == ack, do nothing
-
-                elif packet.command == ALE.CMD_CALL:
-                    if packet.destination in self.addresses or packet.destination == ALE.ADDRESS_ANY:
-                        self.call_address = packet.origin
-                        self.call_timeout_timestamp = current_time + self.call_timeout
-                        self.state = ALE.STATE_CONNECTING
-                        self.log('Incoming call from address ' + packet.origin.decode('utf-8'))
-
-                        if self.callback['call'] != None:
-                            self.callback['call'](packet.origin)
-                        
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                # if command == end, do nothing
-                
-            elif self.state == ALE.STATE_CALLING:
-                # if command == sound, do nothing
-
-                # call handshake step 2
-                if packet.command == ALE.CMD_ACK:
-                    if packet.destination in self.addresses and packet.origin == self.call_address:
-                        self.call_timeout_timestamp = current_time + self.connected_timeout
-                        self.call_started_timestamp = current_time 
-                        self.state = ALE.STATE_CONNECTED
-                        self.log('Connected to address ' + self.call_address.decode('utf-8'))
-
-                        if self.callback['connected'] != None:
-                            self.callback['connected'](self.call_address)
-
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                # call handshake step 1
-                elif packet.command == ALE.CMD_CALL:
-                    if packet.destination in self.addresses and packet.origin == self.call_address:
-                        self.call_timeout_timestamp = current_time + self.call_timeout
-                        self.state = ALE.STATE_CONNECTING
-                        self.log('Connecting to address ' + self.call_address.decode('utf-8'))
-
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                elif packet.command == ALE.CMD_END:
-                    call_duration = current_time - self.call_started_timestamp
-                    self.log('Disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-    
-                    if self.callback['disconnected'] != None:
-                        self.callback['disconnected'](self.call_address, call_duration)
-
-                    self.call_address = None
-                    self.call_started_timestamp = 0
-                    self.call_timeout_timestamp = 0
-                    self.call_channel_attempts.clear()
-                    self.state = ALE.STATE_SCANNING
-
-            # only the called station can be in a connecting state, since the calling station goes from
-            # the calling state directly to to the connected state after ack
-            elif self.state == ALE.STATE_CONNECTING:
-                # if command == sound, do nothing
-
-                # call handshake step 3
-                if packet.command == ALE.CMD_ACK:
-                    if packet.destination in self.addresses and packet.origin == self.call_address:
-                        self.call_timeout_timestamp = current_time + self.connected_timeout
-                        self.call_started_timestamp = current_time
-                        self.state = ALE.STATE_CONNECTED
-                        self.log('Connected to address ' + self.call_address.decode('utf-8'))
-
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                        if self.callback['connected'] != None:
-                            self.callback['connected'](packet.origin)
-
-                elif packet.command == ALE.CMD_CALL:
-                    if packet.destination in self.addresses and packet.origin == self.call_address:
-                        self.call_timeout_timestamp = current_time + self.call_timeout
-                        self.state = ALE.STATE_CONNECTING
-                        self.log('Connecting to address ' + self.call_address.decode('utf-8'))
-
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                elif packet.command == ALE.CMD_END:
-                    call_duration = current_time - self.call_started_timestamp
-                    self.log('Disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-    
-                    if self.callback['disconnected'] != None:
-                        self.callback['disconnected'](self.call_address, call_duration)
-
-                    self.call_address = None
-                    self.call_started_timestamp = 0
-                    self.call_timeout_timestamp = 0
-                    self.call_channel_attempts.clear()
-                    self.state = ALE.STATE_SCANNING
-
-
-            elif self.state == ALE.STATE_CONNECTED:
-                # if command == sound, do nothing
-
-                # if command == ack, do nothing
-
-                # if command == call, do nothing
-
-                if packet.command == ALE.CMD_END:
-                    call_duration = current_time - self.call_started_timestamp
-                    self.log('Disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-    
-                    if self.callback['disconnected'] != None:
-                        self.callback['disconnected'](self.call_address, call_duration)
-
-                    self.call_address = None
-                    self.call_started_timestamp = 0
-                    self.call_timeout_timestamp = 0
-                    self.call_channel_attempts.clear()
-                    self.state = ALE.STATE_SCANNING
-
-            elif self.state == ALE.STATE_SOUNDING:
-                # if command == sound, do nothing
-
-                if packet.command == ALE.CMD_ACK:
-                    # LQA logged above
-                    self.sound_rx_ack_count += 1
-
-                elif packet.command == ALE.CMD_CALL:
-                    if packet.destination in self.addresses or packet.destination == ALE.ADDRESS_ANY:
-                        self.log('End sounding on channel ' + self.channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
-                        self.sound_rx_ack_count = 0
-
-                        self.state = ALE.STATE_CONNECTING
-                        self.log('Incoming call from address ' + self.call_address.decode('utf-8'))
-                        self.call_address = packet.origin
-
-                        if self.callback['call'] != None:
-                            self.callback['call'](packet.origin)
-
-                        # send ack
-                        self.last_ack_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_ACK, self.call_address)
-
-                # if command == end, do nothing
+        self.state_machine.receive_packet(packet)
 
     def _jobs(self):
         while self.online:
@@ -591,118 +343,13 @@ class ALE:
 
             # process log queue
             if current_time > (self.last_log_timestamp + 1) and len(self.log_queue) > 0:
-                thread = threading.Thread(target=self._manage_log)
+                thread = threading.Thread(target=self._process_log_queue)
                 thread.setDaemon(True)
                 thread.start()
 
-            if not self._text_mode:
-                if self.modem.carrier_sense:
-                    self.last_carrier_sense_timestamp = current_time
-
-            if self.sound_packet != None:
-                # if the channel changed before sending the sound ack
-                if self.channel != self.sound_packet.channel:
-                    self.sound_packet = None
-
-            if self.state == ALE.STATE_SCANNING:
-                # ack sounding after delay
-                if (
-                    # sound packet has been received
-                    self.sound_packet != None and
-                    # and channel has not changed since the sounding was received
-                    self.channel == self.sound_packet.channel and
-                    # and no carrier currently detected (i.e. other stations ack-ing)
-                    self.last_carrier_sense_timestamp != current_time and 
-                    # and sounding ack delay has passed
-                    current_time > (self.sound_packet.timestamp + self.sound_ack_delay) and
-                    # and other strong stations have not ack-ed already
-                    self.lqa.should_ack_sound(self.channel, self.sound_packet.origin)
-                ):
-                    #send ack
-                    self._send_ale(ALE.CMD_ACK, self.sound_packet.origin)
-                    self.sound_packet = None
-                        
-                # go to the next channel
-                # if time to change channel and no recent activity on channel
-                if (current_time > (self.last_channel_change_timestamp + ALE.SCAN_WINDOW) and current_time > (self.last_activity_timestamp + ALE.SCAN_WINDOW):
-                    # perform a sounding first if the channel quality data is stale
-                    if self.lqa.channel_stale(self.channel):
-                        self.sound_timeout_timestamp = current_time + self.sound_timeout
-                        self.state = ALE.STATE_SOUNDING
-                        self.log('Begin sounding on channel ' + self.channel)
-
-                        self.last_sound_packet_timestamp = current_time
-                        self._send_ale(ALE.CMD_SOUND, ALE.ADDRESS_ALL)
-                        self.lqa.set_next_sounding(self.channel)
-
-                    # if there are no pending packets in the modem transmit buffer
-                    elif not self._text_mode and len(self.modem._tx_buffer) == 0:
-                        self.next_channel()
-                        self.last_channel_change_timestamp = current_time
-
-                    elif self._text_mode:
-                        self.next_channel()
-                        self.last_channel_change_timestamp = current_time
-                        
-
-            # handle timeout in connecting our connected states
-            if (self.state == ALE.STATE_CONNECTING or self.state == ALE.STATE_CONNECTED) and current_time > self.call_timeout_timestamp:
-                # end the call
-                call_duration = current_time - self.call_started_timestamp
-                self.log('Call timed out, disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-        
-                if self.callback['disconnected'] != None:
-                    self.callback['disconnected'](self.call_address, call_duration)
-    
-                self.call_address = None
-                self.call_started_timestamp = 0
-                self.call_timeout_timestamp = 0
-                self.call_channel_attempts.clear()
-                self.state = ALE.STATE_SCANNING
-
-            # handle calling state
-            if self.state == ALE.STATE_CALLING:
-                # if call timed out
-                if current_time > self.call_timeout_timestamp:
-                    # try the next best channel
-                    if len(self.call_channel_attempts) < self.max_call_channel_attempts:
-                        self.call(self.call_address, next_channel = True)
-                    else:
-                        # end the call
-                        call_duration = current_time - self.call_started_timestamp
-                        self.log('Call timed out, disconnected from address ' + self.call_address.decode('utf-8') + ', call duration: ' + str(int(call_duration)) + ' seconds')
-                
-                        if self.callback['disconnected'] != None:
-                            self.callback['disconnected'](self.call_address, call_duration)
-            
-                        self.call_address = None
-                        self.call_started_timestamp = 0
-                        self.call_timeout_timestamp = 0
-                        self.call_channel_attempts.clear()
-                        self.state = ALE.STATE_SCANNING
-
-                # while calling send call packets once per scan window
-                elif current_time > (self.last_call_packet_timestamp + ALE.SCAN_WINDOW):
-                    self.last_call_packet_timestamp = current_time
-                    self._send_ale(ALE.CMD_CALL, self.call_address)
-
-            # send call ack packets once per scan window
-            if self.state == ALE.STATE_CONNECTING:
-                if current_time > (self.last_ack_packet_timestamp + ALE.SCAN_WINDOW):
-                    self.last_ack_packet_timestamp = current_time
-                    self._send_ale(ALE.CMD_ACK, self.call_address)
-
-            if self.state == ALE.STATE_SOUNDING:
-                # stop sounding if sounding times out without ack
-                if current_time > self.sound_timeout_timestamp:
-                    self.log('End sounding on channel ' +  self.channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
-                    self.sound_rx_ack_count = 0
-                    self.state = ALE.STATE_SCANNING
-                # while sounding send sound packets once per scan window
-                elif current_time > (self.last_sound_packet_timestamp + ALE.SCAN_WINDOW):
-                    self.last_sound_packet_timestamp = current_time
-                    self._send_ale(ALE.CMD_SOUND, ALE.ADDRESS_ALL)
+            self.state_machine.tick()
 
             # simmer down
             time.sleep(0.1)
+
 
