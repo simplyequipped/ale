@@ -75,9 +75,16 @@ class LQA:
         if address != None and max_address_confidence >= (max_channel_confidence * 0.9):
             best_by_channel = best_by_address
 
-        # if history is empty, return the first channel
+        # if history is empty, return the next unexcluded channel
         if best_by_channel == None:
-            return list(self.owner.channels.keys())[0]
+            channels = list(self.owner.channels.keys())
+            for i in range(len(channels)):
+                channel = channels.pop(0)
+                if channel not in exclude_channels:
+                    channels.append(channel)
+
+            return channels[0]
+
         else:
             return best_by_channel
             
