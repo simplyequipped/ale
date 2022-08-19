@@ -111,29 +111,31 @@ class ALE:
         #TODO
         if self._text_mode:
             self.radio = None
+            self.modem = None
             self.log('Text-only mode')
         else:
             self.radio = qdx.QDX(port=radio_serial_port)
             self.log('Radio started')
 
-        alsa_device = fskmodem.get_alsa_device(alsa_device_string)
-        self.modem = fskmodem(
-            alsa_dev_in = alsa_device, 
-            baudrate = baudrate,
-            sync_byte = sync_byte,
-            confidence = confidence
-        )
-        self.log('Modem started')
-        self.modem.set_rx_callback(self._receive)
+            alsa_device = fskmodem.get_alsa_device(alsa_device_string)
+            self.modem = fskmodem.Modem(
+                alsa_dev_in = alsa_device, 
+                baudrate = baudrate,
+                sync_byte = sync_byte,
+                confidence = confidence
+            )
+            self.log('Modem started')
+            self.modem.set_rx_callback(self._receive)
 
+        #TODO
         # configure exit handler
-        atexit.register(self.stop)
+        #atexit.register(self.stop)
 
+        self.online = True
         self.set_scanlist(self.get_scanlists()[0])
         self.set_channel(list(self.channels.keys())[0])
         self.lqa = ale.LQA(self)
         self.state_machine = ale.ALEStateMachine(self)
-        self.online = True
         self.log(str(self) + ' online')
 
         thread = threading.Thread(target=self._jobs)
@@ -144,15 +146,16 @@ class ALE:
         return 'ALE[' + self.address.decode('utf-8') + ']'
 
     def stop(self):
-        self.modem.stop()
-        self.log('Modem stopped')
+        if not self._text_mode:
+            self.modem.stop()
+            self.log('Modem stopped')
 
         if self.online:
             self.online = False
             self.log(str(self) + ' offline')
         
         self.lqa.save_history()
-        self._manage_log()
+        self._process_log_queue()
 
     # useful for displaying antenna requirements
     def get_channel_freq_list(self):
