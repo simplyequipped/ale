@@ -5,11 +5,11 @@ import ale
 
 
 class StateScanning:
-    def __init__(self):
+    def __init__(self, machine):
         self.name = 'scanning'
         self.state = ale.ALE.STATE_SCANNING
         self.active = False
-        self.machine = None
+        self.machine = machine
 
         self.call_address = b''
         self.last_channel_change_timestamp = 0
@@ -85,7 +85,7 @@ class StateScanning:
         current_time = time.time()
         should_ack_sounding = False
         
-        if self.machine.owner.modem.carrier_sense:
+        if self.machine.owner.modem != None and self.machine.owner.modem.carrier_sense:
             self.last_carrier_sense_timestamp = current_time
 
         # if we should ack sounding
@@ -125,18 +125,18 @@ class StateScanning:
                 self.machine.change_state(ale.ALE.STATE_SOUNDING)
             
             # if there are no pending sounding acks or pending packets in the modem transmit buffer
-            elif self.received_sound_packet == None and len(self.machine.owner.modem._tx_buffer) == 0:
+            elif self.received_sound_packet == None and self.machine.owner.modem != None and len(self.machine.owner.modem._tx_buffer) == 0:
                 # go to the next channel
                 self.next_channel()
 
 
 class StateCalling:
-    def __init__(self):
+    def __init__(self, machine):
         self.name = 'calling'
         self.state = ale.ALE.STATE_CALLING
         self.active = False
-        self.machine = None
-        self.call_timeout = 5 * 60 # seconds
+        self.machine = machine
+        self.call_timeout = 30 # seconds
 
         self.call_address = b''
         self.last_channel_change_timestamp = 0
@@ -162,6 +162,8 @@ class StateCalling:
         if not isinstance(self.call_address, bytes):
             self.call_address = self.call_address.encode('utf-8')
 
+        # set calling timeout based on number of channels in current scanlist
+        self.call_timeout = ale.ALE.SCAN_WINDOW * (len(self.machine.owner.channels.keys()) + 1) # seconds
         self.call_started_timestamp = time.time()
         self.call_timeout_timestamp = 0
         self.last_call_packet_timestamp = 0
@@ -207,7 +209,7 @@ class StateCalling:
 
                 address = self.call_address.decode('utf-8')
                 call_duration = int(current_time - self.call_started_timestamp)
-                self.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+                self.machine.owner.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
     
                 if self.machine.owner.callback['disconnected'] != None:
                     self.machine.owner.callback['disconnected'](self.call_address, call_duration)
@@ -224,7 +226,7 @@ class StateCalling:
         address = self.call_address.decode('utf-8')
         scanlist = self.machine.owner.scanlist
         channel = self.best_channel
-        self.log('Calling ' + address + ' on channel ' + scanlist + ':' + channel)
+        self.machine.owner.log('Calling ' + address + ' on channel ' + scanlist + ':' + channel)
 
     def tick(self):
         if not self.active:
@@ -233,24 +235,25 @@ class StateCalling:
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
-        if self.machine.owner.modem.carrier_sense:
+        if self.machine.owner.modem != None and self.machine.owner.modem.carrier_sense:
             self.last_carrier_sense_timestamp = current_time
 
         # if call timed out
-        if current_time > (self.call_timeout_timestamp):
+        if current_time > self.call_timeout_timestamp:
             # try the next best channel
             if len(self.call_channel_attempts) < self.max_call_channel_attempts:
                 self.next_channel()
+                self.call_timeout_timestamp = current_time + self.call_timeout
             else:
                 # end the call
                 address = self.call_address.decode('utf-8')
                 call_duration = int(current_time - self.call_started_timestamp)
-                self.log('Call timed out, no answer from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+                self.machine.owner.log('Call timed out, no answer from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
                 
                 if self.machine.owner.callback['disconnected'] != None:
                     self.machine.owner.callback['disconnected'](self.call_address, call_duration)
 
-            self.machine.change_state(ale.ALE.STATE_SCANNING)
+                self.machine.change_state(ale.ALE.STATE_SCANNING)
 
         # while calling send call packets once per scan window
         elif current_time > (self.last_call_packet_timestamp + ale.ALE.SCAN_WINDOW):
@@ -294,7 +297,7 @@ class StateConnecting:
         address = self.call_address.decode('utf-8')
         scanlist = self.machine.owner.scanlist
         channel = self.machine.owner.channel
-        self.log('Incoming call from address ' + address + ' on channel ' + scanlist + ':' + channel)
+        self.machine.owner.log('Incoming call from address ' + address + ' on channel ' + scanlist + ':' + channel)
 
         if self.machine.owner.callback['call'] != None:
             self.machine.owner.callback['call'](self.call_address)
@@ -340,7 +343,7 @@ class StateConnecting:
 
                 address = self.call_address.decode('utf-8')
                 call_duration = int(current_time - self.call_started_timestamp)
-                self.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+                self.machine.owner.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
     
                 if self.machine.owner.callback['disconnected'] != None:
                     self.machine.owner.callback['disconnected'](self.call_address, call_duration)
@@ -354,7 +357,7 @@ class StateConnecting:
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
-        if self.machine.owner.modem.carrier_sense:
+        if self.machine.owner.modem != None and self.machine.owner.modem.carrier_sense:
             self.last_carrier_sense_timestamp = current_time
 
         # if call timed out
@@ -362,7 +365,7 @@ class StateConnecting:
             # end the call
             address = self.call_address.decode('utf-8')
             call_duration = int(current_time - self.call_started_timestamp)
-            self.log('Call timed out, no acknowledgement from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+            self.machine.owner.log('Call timed out, no acknowledgement from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
             
             if self.machine.owner.callback['disconnected'] != None:
                 self.machine.owner.callback['disconnected'](self.call_address, call_duration)
@@ -376,11 +379,11 @@ class StateConnecting:
 
 
 class StateConnected:
-    def __init__(self):
+    def __init__(self, machine):
         self.name = 'connected'
         self.state = ale.ALE.STATE_CONNECTED
         self.active = True
-        self.machine = None
+        self.machine = machine
         self.call_timeout = 5 * 60 # seconds
 
         self.call_address = b''
@@ -410,7 +413,7 @@ class StateConnected:
         address = self.call_address.decode('utf-8')
         scanlist = self.machine.owner.scanlist
         channel = self.machine.owner.channel
-        self.log('Incoming call from address ' + address + ' on channel ' + scanlist + ':' + channel)
+        self.machine.owner.log('Incoming call from address ' + address + ' on channel ' + scanlist + ':' + channel)
 
         if self.machine.owner.callback['call'] != None:
             self.machine.owner.callback['call'](self.call_address)
@@ -440,7 +443,7 @@ class StateConnected:
 
             address = self.call_address.decode('utf-8')
             call_duration = int(current_time - self.call_started_timestamp)
-            self.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+            self.machine.owner.log('Call ended by address ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
     
             if self.machine.owner.callback['disconnected'] != None:
                 self.machine.owner.callback['disconnected'](self.call_address, call_duration)
@@ -457,7 +460,7 @@ class StateConnected:
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
-        if self.machine.owner.modem.carrier_sense:
+        if self.machine.owner.modem != None and self.machine.owner.modem.carrier_sense:
             self.last_carrier_sense_timestamp = current_time
 
         # if call timed out
@@ -465,7 +468,7 @@ class StateConnected:
             # end the call
             address = self.call_address.decode('utf-8')
             call_duration = int(current_time - self.call_started_timestamp)
-            self.log('Call timed out, disconnected from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
+            self.machine.owner.log('Call timed out, disconnected from ' + address + ' (call duration: ' + str(call_duration) + ' seconds)')
             
             if self.machine.owner.callback['disconnected'] != None:
                 self.machine.owner.callback['disconnected'](self.call_address, call_duration)
@@ -474,11 +477,11 @@ class StateConnected:
 
 
 class StateSounding:
-    def __init__(self):
+    def __init__(self, machine):
         self.name = 'sounding'
         self.state = ale.ALE.STATE_SOUNDING
         self.active = False
-        self.machine = None
+        self.machine = machine
 
         self.call_address = b''
         self.sound_timeout = 0
@@ -499,14 +502,15 @@ class StateSounding:
         return self.state == ale_state
 
     def enter_state(self):
-        self.sound_timeout = ale.ALE.SCAN_WINDOW * len(self.machine.owner.channels.keys()) # seconds
+        # set sounding timeout based on number of channels in current scanlist
+        self.sound_timeout = ale.ALE.SCAN_WINDOW * (len(self.machine.owner.channels.keys()) + 1) # seconds
         self.sound_started_timestamp = time.time()
         self.sound_timeout_timestamp = time.time() + self.sound_timeout
         self.sound_rx_ack_count = 0
 
         scanlist = self.machine.owner.scanlist
         channel = self.machine.owner.channel
-        self.log('Begin sounding on channel ' + scanlist + ':' + channel)
+        self.machine.owner.log('Begin sounding on channel ' + scanlist + ':' + channel)
 
         if self.machine.last_state != None:
             self.last_carrier_sense_timestamp = self.machine.last_state.last_carrier_sense_timestamp
@@ -547,7 +551,7 @@ class StateSounding:
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
-        if self.machine.owner.modem.carrier_sense:
+        if self.machine.owner.modem != None and self.machine.owner.modem.carrier_sense:
             self.last_carrier_sense_timestamp = current_time
 
         # if sounding timed out
@@ -555,7 +559,7 @@ class StateSounding:
             # end sounding
             scanlist = self.machine.owner.scanlist
             channel = self.machine.owner.channel
-            self.log('End sounding on channel ' + scanlist + ':' + channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
+            self.machine.owner.log('End sounding on channel ' + scanlist + ':' + channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
             
             self.machine.change_state(ale.ALE.STATE_SCANNING)
 
@@ -581,7 +585,9 @@ class ALEStateMachine:
         self.online = True
 
         # set initial state
-        self.change_state(ale.ALE.STATE_SCANNING)
+        init_state_index = self.states.index(ale.ALE.STATE_SCANNING)
+        self.state = self.states[init_state_index]
+        self.state.enter_state()
 
     def change_state(self, ale_state):
         # leave the current state
