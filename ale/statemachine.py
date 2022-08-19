@@ -143,7 +143,7 @@ class StateCalling:
         self.last_carrier_sense_timestamp = 0
         self.last_activity_timestamp = 0
         self.last_call_packet_timestamp = 0
-        self.max_call_channel_attemps = 0
+        self.max_call_channel_attempts = 0
         self.call_started_timestamp = 0
         self.call_timeout_timestamp = 0
         self.best_channel = None
@@ -167,7 +167,7 @@ class StateCalling:
         self.last_call_packet_timestamp = 0
         self.call_channel_attempts.clear()
         #TODO should max attempts equal number of channels in scanlist?
-        self.max_call_channel_attempts = min(3, len(self.machine.owner.channel.keys()))
+        self.max_call_channel_attempts = min(3, len(self.machine.owner.channels.keys()))
 
         if self.machine.last_state != None:
             self.last_carrier_sense_timestamp = self.machine.last_state.last_carrier_sense_timestamp
@@ -586,6 +586,7 @@ class ALEStateMachine:
     def change_state(self, ale_state):
         # leave the current state
         self.state.leave_state()
+        # save the last state
         self.last_state = self.state
         # get the object for the next state
         next_state_index = self.states.index(ale_state)
@@ -615,6 +616,6 @@ class ALEStateMachine:
         self.state.enter_state()
 
     def tick(self):
-        self.current_state.tick()
+        self.state.tick()
 
 

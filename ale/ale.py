@@ -109,22 +109,22 @@ class ALE:
         
         # configure radio and modem
         #TODO
-        if not self._text_mode:
-            self.radio = qdx.QDX(port=radio_serial_port)
-
-            alsa_device = fskmodem.get_alsa_device(alsa_device_string)
-            self.modem = fskmodem(
-                alsa_dev_in = alsa_device, 
-                baudrate = baudrate,
-                sync_byte = sync_byte,
-                confidence = confidence
-            )
-            self.log('Modem started')
-            self.modem.set_rx_callback(self._receive)
-        else:
-            self.modem = None
+        if self._text_mode:
             self.radio = None
             self.log('Text-only mode')
+        else:
+            self.radio = qdx.QDX(port=radio_serial_port)
+            self.log('Radio started')
+
+        alsa_device = fskmodem.get_alsa_device(alsa_device_string)
+        self.modem = fskmodem(
+            alsa_dev_in = alsa_device, 
+            baudrate = baudrate,
+            sync_byte = sync_byte,
+            confidence = confidence
+        )
+        self.log('Modem started')
+        self.modem.set_rx_callback(self._receive)
 
         # configure exit handler
         atexit.register(self.stop)
@@ -144,9 +144,8 @@ class ALE:
         return 'ALE[' + self.address.decode('utf-8') + ']'
 
     def stop(self):
-        if not self._text_mode:
-            self.modem.stop()
-            self.log('Modem stopped')
+        self.modem.stop()
+        self.log('Modem stopped')
 
         if self.online:
             self.online = False
