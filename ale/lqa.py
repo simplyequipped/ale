@@ -13,7 +13,7 @@ class LQA:
     SOUND_WINDOW  = 60 * 60 # 60 minutes
     MAX_HISTORY = 1000
 
-    SHOULD_ACK_PACKET_COUNT = 3
+    SHOULD_ACK_MAX_PACKET_COUNT = 3
     SHOULD_ACK_MIN_CONFIDENCE = 1.7
 
     def __init__(self, owner):
@@ -95,11 +95,11 @@ class LQA:
         return False
 
     def set_next_sounding(self, channel):
-        random_interval = random.randint(0, 15) * 60 # 5-15 minutes
+        random_interval = random.randint(0, 15) * 60 # 0-15 minutes
         self.next_sound[channel] = time.time() + LQA.SOUND_WINDOW + random_interval    
 
     # avoid congestion by not ack-ing a sounding if other strong stations already ack-ed
-    def should_ack_sound(self, channel, origin):
+    def should_ack_sound(self, channel, sound_origin):
         packet_count = 0
         current_time = time.time()
 
@@ -107,22 +107,24 @@ class LQA:
         for i in range(len(self.history)):
             packet = self.history.pop()
 
-            # drop stale packets out of convience
+            # drop stale packets, because why not
             if current_time > packet.timestamp + LQA.SOUND_WINDOW:
                 continue
 
-            # if packet matches channel, origin address, and confidence, and is not too old
+            # if packet matches channel, sounding origin, minimum confidence, and maximum age
             packet_stale_timestamp = packet.timestamp + self.owner.sound_timeout
-            if packet.channel == channel and packet.origin == origin and current_time < packet_stale_timestamp and packet.confidence >= LQA.SHOULD_ACK_MIN_CONFIDENCE:
+            if (
+                packet.channel == channel and
+                packet.destination == sound_origin and
+                packet.confidence >= LQA.SHOULD_ACK_MIN_CONFIDENCE and
+                #TODO validate timing
+                current_time < (packet.timestamp + (ale.ALE.SCAN_WINDOW * 3))
+            ):
                 packet_count += 1
 
             self.history.insert(0, packet)
             
-            if packet_count == LQA.SHOULD_ACK_PACKET_COUNT:
-                return False
-
-        # make sure the owner hasn't changed channels
-        if self.owner.sound_packet.channel != self.owner.channel:
+        if packet_count > LQA.SHOULD_ACK_MAX_PACKET_COUNT:
             return False
         else:
             return True

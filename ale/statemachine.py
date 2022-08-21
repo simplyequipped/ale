@@ -62,7 +62,6 @@ class StateScanning:
             # ack once per sounding event, other sounding packets stored for lqa
             if self.received_sound_packet == None:
                 self.last_activity_timestamp = time.time()
-
                 self.received_sound_packet = packet
                 # random delay to avoid multiple stations ack-ing a sounding at the same time
                 self.sound_ack_delay = random.uniform(0.25, 1)
@@ -104,12 +103,13 @@ class StateScanning:
         # if we should ack the sounding, and we are able to ack sounding
         if (
             should_ack_sounding and
-            # no carrier detected within the last millisecond (i.e. other stations responding)
-            self.last_carrier_sense_timestamp < (current_time - 0.001) and 
+            # no carrier detected within the last 10 milliseconds (i.e. other stations responding)
+            self.last_carrier_sense_timestamp < (current_time - 0.01) and 
             # and sounding ack delay has passed
             current_time > (self.received_sound_packet.timestamp + self.sound_ack_delay)
         ):
             #send ack
+            #TODO check if state is active before send
             self.machine.owner._send_ale(ale.ALE.CMD_ACK, self.received_sound_packet.origin)
             self.received.sound_packet = None
 
