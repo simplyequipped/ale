@@ -9,6 +9,7 @@ class StateScanning:
         self.name = 'scanning'
         self.state = ale.ALE.STATE_SCANNING
         self.active = False
+        self.busy = False
         self.machine = machine
 
         self.call_address = b''
@@ -80,6 +81,8 @@ class StateScanning:
         if not self.active:
             return None
 
+        self.busy = True
+
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
         should_ack_sounding = False
@@ -129,12 +132,15 @@ class StateScanning:
                 # go to the next channel
                 self.next_channel()
 
+        self.busy = False
+
 
 class StateCalling:
     def __init__(self, machine):
         self.name = 'calling'
         self.state = ale.ALE.STATE_CALLING
         self.active = False
+        self.busy = False
         self.machine = machine
         self.call_timeout = 30 # seconds
 
@@ -232,6 +238,8 @@ class StateCalling:
         if not self.active:
             return None
 
+        self.busy = True
+
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
@@ -260,6 +268,8 @@ class StateCalling:
             self.last_call_packet_timestamp = current_time
             self.machine.owner._send_ale(ale.ALE.CMD_CALL, self.call_address)
 
+        self.busy = False
+
 
 # only the called station can be in a connecting state, since the calling station goes from
 # the calling state directly to the connected state after ack
@@ -268,6 +278,7 @@ class StateConnecting:
         self.name = 'connecting'
         self.state = ale.ALE.STATE_CONNECTING
         self.active = False
+        self.busy = False
         self.machine = machine
         self.call_timeout = 5 * 60 # seconds
 
@@ -354,6 +365,8 @@ class StateConnecting:
         if not self.active:
             return None
 
+        self.busy = True
+
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
@@ -377,12 +390,15 @@ class StateConnecting:
             self.last_ack_packet_timestamp = current_time
             self.machine.owner._send_ale(ale.ALE.CMD_ACK, self.call_address)
 
+        self.busy = False
+
 
 class StateConnected:
     def __init__(self, machine):
         self.name = 'connected'
         self.state = ale.ALE.STATE_CONNECTED
         self.active = True
+        self.busy = False
         self.machine = machine
         self.call_timeout = 5 * 60 # seconds
 
@@ -457,6 +473,8 @@ class StateConnected:
         if not self.active:
             return None
 
+        self.busy = True
+
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
@@ -475,12 +493,14 @@ class StateConnected:
                 
             self.machine.change_state(ale.ALE.STATE_SCANNING)
 
+        self.busy = False
 
 class StateSounding:
     def __init__(self, machine):
         self.name = 'sounding'
         self.state = ale.ALE.STATE_SOUNDING
         self.active = False
+        self.busy = False
         self.machine = machine
 
         self.call_address = b''
@@ -548,6 +568,8 @@ class StateSounding:
         if not self.active:
             return None
 
+        self.busy = True
+
         # store current time to avoid multiple calls to time.time()
         current_time = time.time()
 
@@ -567,6 +589,8 @@ class StateSounding:
         elif current_time > (self.last_sound_packet_timestamp + ale.ALE.SCAN_WINDOW):
             self.last_sound_packet_timestamp = current_time
             self.machine.owner._send_ale(ale.ALE.CMD_SOUND, ale.ALE.ADDRESS_ALL)
+
+        self.busy = False
 
 
 class ALEStateMachine:
@@ -592,6 +616,9 @@ class ALEStateMachine:
     def change_state(self, ale_state):
         # leave the current state
         self.state.leave_state()
+        # wait for current state to finish working
+        while self.state.busy:
+            time.sleep(0.001)
         # save the last state
         self.last_state = self.state
         # get the object for the next state
