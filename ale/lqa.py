@@ -95,7 +95,7 @@ class LQA:
         return False
 
     def set_next_sounding(self, channel):
-        random_interval = random.randint(5, 15) * 60 # 5-15 minutes
+        random_interval = random.randint(0, 15) * 60 # 5-15 minutes
         self.next_sound[channel] = time.time() + LQA.SOUND_WINDOW + random_interval    
 
     # avoid congestion by not ack-ing a sounding if other strong stations already ack-ed
