@@ -1,3 +1,20 @@
+# ALE state machine module
+# 
+# Classes:
+#   StateScanning
+#   StateCalling
+#   StateConnecting
+#   StateConnected
+#   StateSounding
+#   StateMachine
+#
+# Written by Howard at Simply Equipped LLC
+# June 2022
+#
+# simplyequipped.com
+# github.com/simplyequipped
+
+
 import time
 import random
 
@@ -5,6 +22,23 @@ import ale
 
 
 class StateScanning:
+    """
+    ALE state machine object (ale.ALE.STATE_SCANNING)
+
+    Initial state of the ALE state machine.
+
+    Enter state from:
+        - calling state
+        - connecting state
+        - connected state
+        - sounding state
+
+    Leave state to:
+        - calling state
+        - connecting state
+        - sounding state
+    """
+
     def __init__(self, machine):
         self.name = 'scanning'
         self.state = ale.ALE.STATE_SCANNING
@@ -112,7 +146,6 @@ class StateScanning:
             current_time > (self.received_sound_packet.timestamp + self.sound_ack_delay)
         ):
             #send ack
-            #TODO check if state is active before send
             self.machine.owner._send_ale(ale.ALE.CMD_ACK, self.received_sound_packet.origin)
             self.received.sound_packet = None
 
@@ -136,6 +169,18 @@ class StateScanning:
 
 
 class StateCalling:
+    """
+    ALE state machine object (ale.ALE.STATE_CALLING)
+
+    Enter state from:
+        None, on user request only
+
+    Leave state to:
+        - scanning state
+        - connecting state
+        - connected state
+    """
+
     def __init__(self, machine):
         self.name = 'calling'
         self.state = ale.ALE.STATE_CALLING
@@ -174,8 +219,7 @@ class StateCalling:
         self.call_timeout_timestamp = 0
         self.last_call_packet_timestamp = 0
         self.call_channel_attempts.clear()
-        #TODO should max attempts equal number of channels in scanlist?
-        self.max_call_channel_attempts = min(3, len(self.machine.owner.channels.keys()))
+        self.max_call_channel_attempts = len(self.machine.owner.channels.keys())
 
         if self.machine.last_state != None:
             self.last_carrier_sense_timestamp = self.machine.last_state.last_carrier_sense_timestamp
@@ -274,6 +318,18 @@ class StateCalling:
 # only the called station can be in a connecting state, since the calling station goes from
 # the calling state directly to the connected state after ack
 class StateConnecting:
+    """
+    ALE state machine object (ale.ALE.STATE_CONNECTING)
+
+    Enter state from:
+        - scanning state
+        - calling state
+
+    Leave state to:
+        - scanning state
+        - connected state
+    """
+
     def __init__(self, machine):
         self.name = 'connecting'
         self.state = ale.ALE.STATE_CONNECTING
@@ -299,7 +355,6 @@ class StateConnecting:
         return self.state == ale_state
 
     def enter_state(self):
-        #TODO set in scanning and sounding state where packet is received
         self.call_address = self.machine.last_state.call_address
         self.last_ack_packet_timestamp = 0
         self.call_started_timestamp = time.time()
@@ -394,6 +449,17 @@ class StateConnecting:
 
 
 class StateConnected:
+    """
+    ALE state machine object (ale.ALE.STATE_CONNECTED)
+
+    Enter state from:
+        - calling state
+        - connecting state
+
+    Leave state to:
+        - scanning state
+    """
+
     def __init__(self, machine):
         self.name = 'connected'
         self.state = ale.ALE.STATE_CONNECTED
@@ -420,7 +486,6 @@ class StateConnected:
     # enter state from:
     #   calling
     #   connecting
-    #
     def enter_state(self):
         self.call_address = self.machine.last_state.call_address
         self.call_started_timestamp = self.machine.last_state.call_started_timestamp
@@ -496,6 +561,17 @@ class StateConnected:
         self.busy = False
 
 class StateSounding:
+    """
+    ALE state machine object (ale.ALE.STATE_SOUNDING)
+
+    Enter state from:
+        - scanning state
+
+    Leave state to:
+        - scanning state
+        - connecting state
+    """
+
     def __init__(self, machine):
         self.name = 'sounding'
         self.state = ale.ALE.STATE_SOUNDING
@@ -542,7 +618,6 @@ class StateSounding:
 
     def leave_state(self):
         self.active = False
-        self.machine.owner.lqa.set_next_sounding(self.machine.owner.channel)
 
     def receive_packet(self, packet):
         if not self.active:
@@ -582,6 +657,9 @@ class StateSounding:
             scanlist = self.machine.owner.scanlist
             channel = self.machine.owner.channel
             self.machine.owner.log('End sounding on channel ' + scanlist + ':' + channel + ', ' + str(self.sound_rx_ack_count) + ' responses')
+
+            # set next sounding on the current channel
+            self.machine.owner.lqa.set_next_sounding(self.machine.owner.channel)
             
             self.machine.change_state(ale.ALE.STATE_SCANNING)
 
@@ -594,6 +672,28 @@ class StateSounding:
 
 
 class ALEStateMachine:
+    """
+    ALE state machine object
+
+    Initial state: ale.ALE.STATE_SCANNING
+
+    The call handshake process ensures that both parties receive acknoledgement from the other. Without the
+    final acknowledgement from the call origin station back to the call destination station, the destination
+    station does not know if the origin station is able to hear them and received their call acknowledgement.
+
+    Example call handshake:
+
+    USER A          ACTIVITY        USER B          COMMENTS
+    Scanning        --              Scanning        Pre-call state
+    Calling         call ->         Scanning        User A initializes outgoing call
+    Calling         <- ack          Connecting      User B receives incoming call and acknowledges
+    Connected       ack ->          Connecting      User A receives user B acknowledgement and acknowledges back
+    Connected       --              Connected       User B receives user A acknowledgement, handshake complete
+    Connected       <- data ->      Connected       Two-way data transfer
+    Connected       <- end          Scanning        User B disconnects
+    Scanning        --              Scanning        User A receives user B disconnection, post-call state
+    """
+
     def __init__(self, owner):
         self.owner = owner
         self.states = []
@@ -605,8 +705,6 @@ class ALEStateMachine:
         self.states.append(StateConnecting(self))
         self.states.append(StateConnected(self))
         self.states.append(StateSounding(self))
-
-        self.online = True
 
         # set initial state
         init_state_index = self.states.index(ale.ALE.STATE_SCANNING)
@@ -630,7 +728,6 @@ class ALEStateMachine:
     def get_state(self):
         return self.state
 
-    #TODO remove if not used
     def get_state_object(self, ale_state):
         state_index = self.states.index(ale_state)
         return self.states[state_index]
@@ -642,6 +739,12 @@ class ALEStateMachine:
     def keep_alive(self):
         if self.state == ale.ALE.STATE_CONNECTED:
             self.state.keep_alive()
+
+    def send(self, data, keep_alive=False):
+        if self.state == ale.ALE.STATE_CONNECTED and self.machine.owner.modem != None:
+            self.machine.owner.modem.send(data)
+            if keep_alive:
+                self.state.keep_alive()
 
     def call(self, address):
         self.change_state(ale.ALE.STATE_CALLING)

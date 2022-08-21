@@ -1,3 +1,12 @@
+# Non-standard Automatic Link Establishment (ALE) module
+#
+# Written by Howard at Simply Equipped
+# June 2022
+#
+# simplyequipped.com
+# github.com/simplyequipped
+
+
 import os
 import threading
 import time
@@ -15,12 +24,11 @@ import ale
 # - add fskmodem.receiving(), return bool (based on carrier sense)
 # - add fskmodem.transmitting(), return bool
 # - Reticulum ALE interface using Reticulum destinations as addresses
-# - transmit timing may not be accurate due to fskmodem carrier sense
+# - transmit timing may not be accurate due to fskmodem carrier sense collision avoidance
 # - support other tranceivers via hamlib/flrig?
 # - support other modems via fldigi?
 # - channel data could include more extensive modem and radio config
 
-#TODO in jobs loop, monitor modem tx buffer for packets with channels other than the current channel
 #TODO save and load config data: address, whitelist, blacklist
 
 
@@ -48,22 +56,18 @@ class ALE:
 
     SCAN_WINDOW = 3 # seconds
 
-    def __init__(self, address, radio_serial_port=None, alsa_device_string='QDX', baudrate=300, sync_byte='0x23', confidence=1.5, text_mode=False):
+    def __init__(self, address=None, radio_serial_port=None, alsa_device_string='QDX', baudrate=300, sync_byte='0x23', confidence=1.5, text_mode=False):
         self._text_mode = text_mode
         self.baudrate = baudrate
         self.scanlists = ale.default_scanlists
+        self.address = address
+        #TODO confirm this is used correctly in state logic
+        self.addresses = [self.address]
 
         self.enable_whitelist = False
         self.whitelist_addresses = []
         self.enable_blacklist = False
         self.blacklist_addresses = []
-
-        if not isinstance(address, bytes):
-            address = address.encode('utf-8')
-
-        self.address = address
-        self.addresses = [self.address]
-        self.group_addresses = []
 
         self.callback = {
             'rx' : None,
@@ -76,37 +80,43 @@ class ALE:
         self.last_log_timestamp = 0
 
         self.config_dir = os.path.expanduser('~/.ale')
+        self.config_path = os.path.join(self.config_dir, 'config')
         self.scanlist_path = os.path.join(self.config_dir, 'scanlists')
         self.log_path = os.path.join(self.config_dir, 'log')
 
-        #TODO cull log instead
-        # clear log when starting
+        # ensure config directory exists
+        if not os.path.exists(self.config_dir):
+            os.mkdir(self.config_dir)
+
+        #TODO cull log instead?
+        # clear log file
         if os.path.exists(self.log_path):
             os.remove(self.log_path)
 
-        # if scanlist file doesn't exist, create it using the default scanlist
-        if not os.path.exists(self.scanlist_path):
-            if not os.path.exists(self.config_dir):
-                os.mkdir(self.config_dir)
-
-            try:
-                with open(self.scanlist_path, 'w') as fd:
-                    json.dump(self.scanlists, fd, indent='\t')
-                self.log('Saved scanlists to ' + self.scanlist_path)
-            except:
-                #TODO handle
-                pass
-
-        # if the scanlist file exists, load it
+        # if scanlist file exists, load it
+        if os.path.exists(self.scanlist_path):
+            self.load_scanlists()
+        # if scanlist file does not exist, create it using the default scanlist
         else:
-            try:
-                with open(self.scanlist_path, 'r') as fd:
-                    self.scanlists = json.load(fd)
-                self.log('Loaded scanlists from ' + self.scanlist_path)
-            except:
-                #TODO handle
-                pass
-        
+            self.save_scanlists()
+
+        # if config file exists, load it
+        if os.path.exists(self.config_path):
+            self.load_config()
+        # if config file does not exist, create it using default settings
+        else:
+            self.save_config()
+
+        if self.address in [None, '', b'']:
+            raise ValueError('ALE address cannot be empty. Update config file or pass address to ale.ALE() object on creation.')
+
+        if not isinstance(self.address, bytes):
+            self.address = address.encode('utf-8')
+
+        for i in range(len(self.addresses)):
+            if not isinstance(self.addresses[i], bytes):
+                self.addresses[i].encode('utf-8')
+
         # configure radio and modem
         #TODO
         if self._text_mode:
@@ -166,12 +176,67 @@ class ALE:
 
         return freqs.sort()
 
+    def load_config(self):
+        try:
+            with open(self.config_path, 'r') as fd:
+                config = json.load(fd)
+
+            self.address = config['address']
+            self.addresses = config['addresses']
+            self.enable_whitelist = config['enable_whitelist']
+            self.whitelist = config['whitelist']
+            self.enable_blacklist = config['enable_blacklist']
+            self.blacklist = config['blacklist']
+
+            self.log('Loaded configuration from ' + self.config_path)
+        except:
+            #TODO handle
+            pass
+
+    def save_config(self):
+        config = {
+            'address': self.address,
+            'addresses': self.addresses,
+            'enable_whitelist': self.enable_whitelist 
+            'whitelist': self.whitelist,
+            'enable_blacklist': self.enable_blacklist 
+            'blacklist': self.blacklist
+        }
+
+        try:
+            with open(self.config_path, 'w') as fd:
+                json.dump(config, fd, indent='\t')
+
+            self.log('Saved configuration to ' + self.config_path)
+        except:
+            #TODO handle
+            pass
+
+    def load_scanlists(self):
+        if os.path.exists(self.scanlist_path):
+            try:
+                with open(self.scanlist_path, 'r') as fd:
+                    self.scanlists = json.load(fd)
+                self.log('Loaded scanlists from ' + self.scanlist_path)
+            except:
+                #TODO handle
+                pass
+
+    def save_scanlists(self):
+        try:
+            with open(self.scanlist_path, 'w') as fd:
+                json.dump(self.scanlists, fd, indent='\t')
+            self.log('Saved scanlists to ' + self.scanlist_path)
+        except:
+            #TODO handle
+            pass
+
     def set_scanlist(self, scanlist):
         if scanlist not in self.scanlists.keys():
             return None
 
         self.scanlist = scanlist
-        self.channels = self.scanlists[self.scanlist]
+        self.channels = self.scanlists[scanlist]
         num_channels = len(self.channels.keys())
 
         self.log('Scanlist set to ' + self.scanlist + ' (' + str(num_channels) + ' channels, ' + str(num_channels * ALE.SCAN_WINDOW) + ' seconds total scan time)')
@@ -179,13 +244,59 @@ class ALE:
     def get_scanlists(self):
         return list(self.scanlists.keys())
 
+    def add_scanlist(self, scanlist):
+        if scanlist not in self.scanlists.keys():
+            self.scanlists[scanlists] = []
+
+    def remove_scanlist(self, scanlist):
+        if scanlist in self.scanlists.keys():
+            del self.scanlists[scanlist]
+
+    def add_channel(self, scanlist, channel_name, freq, mode):
+        if scanlist in self.scanlists.keys() and channel_name not in self.scanlists[scanlist].keys():
+            self.scanlists[scanlist][channel_name] = {'freq': freq, 'mode': mode}
+
+    def remove_channel(self, scanlist, channel_name):
+        if self.scanlist in self.scanlists.keys() and channel_name in self.scanlists[scanlist].keys():
+            del self.scanlists[scanlist][channel_name]
+
+    def update_channel(self, scanlist, channel_name, freq=None, mode=None):
+        if self.scanlist in self.scanlists.keys() and channel_name in self.scanlists[scanlist].keys():
+            if freq != None:
+                self.scanlists[scanlist][channel_name]['freq'] = freq
+
+            if mode != None:
+                self.scanlists[scanlist][channel_name]['mode'] = mode
+
+    def set_channel(self, channel):
+        if channel not in self.channels.keys():
+            return None
+
+        if not self._text_mode:
+            try:
+                self.radio.set_vfo_a(self.channels[self.channel]['freq'])
+    
+                #TODO change qdx to accept 'USB' and 'LSB' as sideband settings 
+                if self.channels[self.channel]['mode'] == 'USB':
+                    self.radio.set_sideband(0)
+                if self.channels[self.channel]['mode'] == 'LSB':
+                    self.radio.set_sideband(1)
+            except:
+                #TODO handle
+                # if error communicating with radio, go offline
+                self.online == False
+                self.log('Going offline, failed to communicate with radio')
+
+        if self.online:
+            self.channel = channel
+
     def add_address(self, address):
         if address not in self.addresses:
             self.addresses.append(address)
             self.log('Added self address ' + address.decode('utf-8'))
 
     def remove_address(self, address):
-        if address in self.addresses:
+        if address != self.address and address in self.addresses:
             self.addresses.remove(address)
             self.log('Removed self address ' + address.decode('utf-8'))
 
@@ -246,39 +357,15 @@ class ALE:
         self.log_queue.clear()
         self.last_log_timestamp = time.time()
 
-    def set_channel(self, channel):
-        if channel not in self.channels.keys():
-            return None
-
-        if not self._text_mode:
-            try:
-                self.radio.set_vfo_a(self.channels[self.channel]['freq'])
-    
-                #TODO change qdx to accept 'USB' and 'LSB' as sideband settings 
-                if self.channels[self.channel]['mode'] == 'USB':
-                    self.radio.set_sideband(0)
-                if self.channels[self.channel]['mode'] == 'LSB':
-                    self.radio.set_sideband(1)
-            except:
-                #TODO handle
-                # if error communicating with radio, go offline
-                self.online == False
-                self.log('Going offline, failed to communicate with radio')
-
-        if self.online:
-            self.channel = channel
-            #TODO remove, or add logging levels?
-            #self.log('Channel set to ' + channel) 
-
     def call(self, address):
         self.state_machine.call(address)
 
-    def send(self, data):
+    def send(self, data, keep_alive=False):
         #TODO
         if self._text_mode:
             print(data)
         else:
-            self.modem.send(data)
+            self.state_machine.send(data, keep_alive)    
         
     def _send_ale(self, command, address=b'', data=b''):
         if command not in ALE.COMMANDS:
@@ -303,22 +390,20 @@ class ALE:
         self.send(packet.pack())
 
     def _receive(self, raw, confidence):
-        current_time = time.time()
-
         preamble = raw[:len(ale.Packet.PREAMBLE)]
         # handle non-ale packets
         if preamble != ale.Packet.PREAMBLE:
             if self.state_machine.state == ale.ALE.CONNECTED:
                 self.state.keep_alive()
                 
-                # pass packets to data handling application when connected
+                # pass to data handling application when connected
                 if self.callback['receive'] != None:
                     self.callback['receive'](raw)
 
             # drop the packet, no further processing
             return None
 
-        # load received date into packet
+        # load received data into packet
         packet = ale.Packet()
         # discard packet if it fails to unpack, which likely means it is corrupted
         try:
@@ -326,9 +411,10 @@ class ALE:
         except:
             return None
 
-        packet.timestamp = current_time
+        packet.timestamp = time.time()
         packet.channel = self.channel
         packet.confidence = confidence
+        # store packet in lqa history
         self.lqa.store(packet)
 
         if self.enable_whitelist and packet.origin not in self.whitelist_addresses:
@@ -337,21 +423,27 @@ class ALE:
         if self.enable_blacklist and packet.origin in self.blacklist_addresses:
             return None
 
+        # pass packet to the current state for handling
         self.state_machine.receive_packet(packet)
 
     def _jobs(self):
         while self.online:
-            current_time = time.time()
-
             # process log queue
-            if current_time > (self.last_log_timestamp + 1) and len(self.log_queue) > 0:
+            if time.time() > (self.last_log_timestamp + 1) and len(self.log_queue) > 0:
                 thread = threading.Thread(target=self._process_log_queue)
                 thread.setDaemon(True)
                 thread.start()
 
+            # tick state machine
             self.state_machine.tick()
 
+            # remove packets in the modem tx buffer if they are for a channel other than the current channel
+            if self.modem != None and (len(self.modem._tx_buffer) > 0):
+                for i in range(len(self.modem._tx_buffer)):
+                    if self.modem._tx_buffer[i].channel != self.channel:
+                        self.modem._tx_buffer.remove(i)
+
             # simmer down
-            time.sleep(0.1)
+            time.sleep(0.001)
 
 
