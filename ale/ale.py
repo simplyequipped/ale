@@ -113,6 +113,9 @@ class ALE:
         if not isinstance(self.address, bytes):
             self.address = address.encode('utf-8')
 
+        if self.address not in self.addresses:
+            self.addresses.append(self.address)
+
         for i in range(len(self.addresses)):
             if not isinstance(self.addresses[i], bytes):
                 self.addresses[i].encode('utf-8')
