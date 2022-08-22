@@ -12,7 +12,6 @@ import threading
 import time
 import random
 import json
-import atexit
 
 #import qdx
 import fskmodem
@@ -29,7 +28,9 @@ import ale
 # - support other modems via fldigi?
 # - channel data could include more extensive modem and radio config
 
-#TODO save and load config data: address, whitelist, blacklist
+#TODO handle group calls, specifically multiple stations sending acks. how does this work
+#       once in a connected state where acks will be ignored? Remove group support?
+
 
 
 class ALE:
@@ -56,14 +57,18 @@ class ALE:
 
     SCAN_WINDOW = 3 # seconds
 
-    def __init__(self, address=None, radio_serial_port=None, alsa_device_string='QDX', baudrate=300, sync_byte='0x23', confidence=1.5, text_mode=False):
+    def __init__(self, config_path=None, text_mode=False):
         self._text_mode = text_mode
-        self.baudrate = baudrate
-        self.scanlists = ale.default_scanlists
-        self.address = address
-        #TODO confirm this is used correctly in state logic
-        self.addresses = [self.address]
 
+        self.radio_serial_port = None
+        self.modem_alsa_device = 'QDX'
+        self.modem_baudrate = 300
+        self.modem_sync_byte = 0x23
+        self.modem_confidence = 1.5
+
+        self.scanlists = ale.default_scanlists
+        self.address = None
+        self.addresses = []
         self.enable_whitelist = False
         self.whitelist_addresses = []
         self.enable_blacklist = False
@@ -83,6 +88,10 @@ class ALE:
         self.config_path = os.path.join(self.config_dir, 'config')
         self.scanlist_path = os.path.join(self.config_dir, 'scanlists')
         self.log_path = os.path.join(self.config_dir, 'log')
+
+        # use given alternate config file path if it exsits
+        if os.path.exists(config_path):
+            self.config_path = config_path
 
         # ensure config directory exists
         if not os.path.exists(self.config_dir):
@@ -140,10 +149,6 @@ class ALE:
             self.log('Modem started')
             self.modem.set_rx_callback(self._receive)
 
-        #TODO
-        # configure exit handler
-        #atexit.register(self.stop)
-
         self.online = True
         self.set_scanlist(self.get_scanlists()[0])
         self.set_channel(list(self.channels.keys())[0])
@@ -185,12 +190,29 @@ class ALE:
                 config = json.load(fd)
 
             self.address = config['address']
-            self.addresses = config['addresses']
-            self.enable_whitelist = config['enable_whitelist']
-            self.whitelist = config['whitelist']
-            self.enable_blacklist = config['enable_blacklist']
-            self.blacklist = config['blacklist']
-
+            if 'group_addresses' in config.keys():
+                self.addresses = config['addresses']
+            if 'whitelist' in config.keys():
+                self.enable_whitelist = True
+                self.whitelist_addresses = config['whitelist']
+            if 'blacklist' in config.keys():
+                self.enable_blacklist = True
+                self.blacklist_addresses = config['blacklist']
+            if 'scanlist' in config.keys():
+                self.set_scanlist(config['scanlist'])
+            if 'radio' in config.keys():
+                if 'serial_port' in config['radio'].keys() 
+                    self.radio_serial_port = config['radio']['serial_port']
+            if 'modem' in config.keys():
+                if 'alsa_device' in config['modem']:
+                    self.modem_alsa_device = config['modem']['alsa_device']
+                if 'baudrate' in config['modem']:
+                    self.modem_baudrate = config['modem']['baudrate']
+                if 'sync_byte' in config['modem']:
+                    self.modem_sync_byte = config['modem']['sync_byte']
+                if 'confidence' in config['modem']:
+                    self.modem_confidence = config['modem']['confidence']
+ 
             self.log('Loaded configuration from ' + self.config_path)
         except:
             #TODO handle
@@ -199,11 +221,19 @@ class ALE:
     def save_config(self):
         config = {
             'address': self.address,
-            'addresses': self.addresses,
-            'enable_whitelist': self.enable_whitelist 
-            'whitelist': self.whitelist,
-            'enable_blacklist': self.enable_blacklist 
-            'blacklist': self.blacklist
+            'group_addresses': self.addressses,
+            'whitelist': self.whitelist_adddresses,
+            'blacklist': self.whitelist_addresses,
+            'scanlist': self.scanlist,
+            'radio': {
+                'serial_port': self.radio_serial_port
+                },
+            'modem': {
+                'alsa_device': self.modem_alsa_device,
+                'baudrate': self.modem_baudrate,
+                'sync_byte': self.modem_sync_byte,
+                'confidence': self.modem_confidence
+                }
         }
 
         try:
