@@ -127,7 +127,7 @@ class ALE:
 
         for i in range(len(self.addresses)):
             if not isinstance(self.addresses[i], bytes):
-                self.addresses[i].encode('utf-8')
+                self.addresses[i] = self.addresses[i].encode('utf-8')
 
         # configure radio and modem
         #TODO
@@ -139,6 +139,7 @@ class ALE:
             self.radio = qdx.QDX(port=radio_serial_port)
             self.log('Radio started')
 
+            #TODO move modem config to config file
             alsa_device = fskmodem.get_alsa_device(alsa_device_string)
             self.modem = fskmodem.Modem(
                 alsa_dev_in = alsa_device, 
