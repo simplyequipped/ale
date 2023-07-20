@@ -162,7 +162,7 @@ class ALE:
         thread.start()
 
     def __repr__(self):
-        return 'ALE[' + self.address.decode('utf-8') + ']'
+        return '<ALE {}>'.format(self.address.decode('utf-8'))
 
     def stop(self):
         if not self._text_mode:
@@ -178,12 +178,10 @@ class ALE:
 
     # useful for displaying antenna requirements
     def get_channel_freq_list(self):
-        freqs = []
+        freqs = [channel['freq'] for channel in self.channels]
+        freqs.sort()
 
-        for channel in self.channels:
-            freqs.append(channel['freq'])
-
-        return freqs.sort()
+        return freqs
 
     def load_config(self):
         try:
@@ -267,35 +265,35 @@ class ALE:
 
     def set_scanlist(self, scanlist):
         if scanlist not in self.scanlists.keys():
-            return None
+            raise ValueError('Scanlist not found')
 
         self.scanlist = scanlist
         self.channels = self.scanlists[scanlist]
-        num_channels = len(self.channels.keys())
+        num_channels = len(self.channels)
 
-        self.log('Scanlist set to ' + self.scanlist + ' (' + str(num_channels) + ' channels, ' + str(num_channels * ALE.SCAN_WINDOW) + ' seconds total scan time)')
+        self.log('Scanlist set to {} ({} channels, {} seconds total scan time)'.format(self.scanlist, len(self.channels), len(self.channels) * ALE.SCAN_WINDOW))
 
     def get_scanlists(self):
-        return list(self.scanlists.keys())
+        return self.scanlists.keys()
 
     def add_scanlist(self, scanlist):
-        if scanlist not in self.scanlists.keys():
+        if scanlist not in self.scanlists:
             self.scanlists[scanlists] = []
 
     def remove_scanlist(self, scanlist):
-        if scanlist in self.scanlists.keys():
+        if scanlist in self.scanlists:
             del self.scanlists[scanlist]
 
     def add_channel(self, scanlist, channel_name, freq, mode):
-        if scanlist in self.scanlists.keys() and channel_name not in self.scanlists[scanlist].keys():
+        if scanlist in self.scanlists and channel_name not in self.scanlists[scanlist]:
             self.scanlists[scanlist][channel_name] = {'freq': freq, 'mode': mode}
 
     def remove_channel(self, scanlist, channel_name):
-        if self.scanlist in self.scanlists.keys() and channel_name in self.scanlists[scanlist].keys():
+        if scanlist in self.scanlists and channel_name in self.scanlists[scanlist]:
             del self.scanlists[scanlist][channel_name]
 
     def update_channel(self, scanlist, channel_name, freq=None, mode=None):
-        if self.scanlist in self.scanlists.keys() and channel_name in self.scanlists[scanlist].keys():
+        if scanlist in self.scanlists and channel_name in self.scanlists[scanlist]:
             if freq != None:
                 self.scanlists[scanlist][channel_name]['freq'] = freq
 
@@ -303,7 +301,7 @@ class ALE:
                 self.scanlists[scanlist][channel_name]['mode'] = mode
 
     def set_channel(self, channel):
-        if channel not in self.channels.keys():
+        if channel not in self.channels:
             return None
 
         if not self._text_mode:
@@ -403,7 +401,7 @@ class ALE:
         
     def _send_ale(self, command, address=b'', data=b''):
         if command not in ALE.COMMANDS:
-            return None
+            raise ValueError('Invalid command \'{}\''.format(command))
 
         packet = ale.Packet(self.address, address, command, data)
 
