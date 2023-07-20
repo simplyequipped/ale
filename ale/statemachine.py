@@ -74,6 +74,7 @@ class StateScanning:
         self.active = True
 
     def leave_state(self):
+        #TODO this should be False, right?
         self.active = True
         
     def next_channel(self):
