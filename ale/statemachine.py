@@ -745,7 +745,7 @@ class ALEStateMachine:
         if self.state == ale.ALE.STATE_CONNECTED and self.machine.owner.modem != None:
             self.machine.owner.modem.send(data)
             if keep_alive:
-                self.state.keep_alive()
+                self.keep_alive()
 
     def call(self, address):
         self.change_state(ale.ALE.STATE_CALLING)
